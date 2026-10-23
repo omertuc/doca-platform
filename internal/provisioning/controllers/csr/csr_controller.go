@@ -27,12 +27,14 @@ import (
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
 	hostutil "github.com/nvidia/doca-platform/internal/provisioning/hostagent/util"
 	providentity "github.com/nvidia/doca-platform/internal/provisioning/utils/certificate/identity"
+	dpfutils "github.com/nvidia/doca-platform/internal/utils"
 	"github.com/nvidia/doca-platform/internal/utils/tracing"
 
 	certmanager "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apiserver/pkg/authentication/serviceaccount"
 	clientset "k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -51,7 +53,7 @@ const (
 
 type CSRReconciler struct {
 	RuntimeClient client.Client
-	ClientSet     *clientset.Clientset
+	ClientSet     clientset.Interface
 }
 
 // +kubebuilder:rbac:groups=certificates.k8s.io,resources=certificatesigningrequests,verbs=get;list;watch
@@ -82,9 +84,22 @@ func (r *CSRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl
 		return ctrl.Result{}, nil
 	}
 
+	// A ServiceAccount is only a DPU agent bootstrapping in the namespace dedicated to their
+	// ServiceAccounts. Any other is not ours to approve, as host agent or otherwise.
+	if isServiceAccountCSR(csr) {
+		ours, err := r.isDPUAgentServiceAccountCSR(ctx, csr)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ours {
+			log.V(3).Info("CSR from a ServiceAccount outside the DPU agent bootstrap namespace, skipped", "name", csr.Name, "username", csr.Spec.Username)
+			return ctrl.Result{}, nil
+		}
+	}
+
 	approvalReason := hostAgentApprovedReason
 	approvalLogMessage := "Host agent CSR approved"
-	if isDPUAgentCSR(csr) {
+	if isDPUAgentCSR(csr) || isServiceAccountCSR(csr) {
 		if err := r.validateDPUAgentCSR(ctx, csr); err != nil {
 			var validationErr *csrValidationError
 			if errors.As(err, &validationErr) {
@@ -122,7 +137,9 @@ func shouldProcessCSRObject(o client.Object) bool {
 			return true
 		}
 	}
-	return false
+	// The namespace of the DPU agent bootstrap ServiceAccounts is configurable, so a predicate
+	// cannot tell them from other ServiceAccounts. Reconcile tells them apart.
+	return isServiceAccountCSR(csr)
 }
 
 type csrValidationError struct {
@@ -148,6 +165,40 @@ func isDPUAgentCSR(csr *certmanager.CertificateSigningRequest) bool {
 	return false
 }
 
+// serviceAccountRequester returns the namespace and name of the ServiceAccount that created the
+// CSR, if a ServiceAccount did.
+func serviceAccountRequester(csr *certmanager.CertificateSigningRequest) (namespace, name string, ok bool) {
+	namespace, name, err := serviceaccount.SplitUsername(csr.Spec.Username)
+	if err != nil {
+		return "", "", false
+	}
+	return namespace, name, true
+}
+
+func isServiceAccountCSR(csr *certmanager.CertificateSigningRequest) bool {
+	_, _, ok := serviceAccountRequester(csr)
+	return ok
+}
+
+// isDPUAgentServiceAccountCSR reports whether the CSR was created by a ServiceAccount in the
+// namespace that the DPFOperatorConfig dedicates to DPU agent bootstrap ServiceAccounts. The
+// namespace is only dedicated to them, and only exists, while the ServiceAccountToken method is
+// selected.
+func (r *CSRReconciler) isDPUAgentServiceAccountCSR(ctx context.Context, csr *certmanager.CertificateSigningRequest) (bool, error) {
+	namespace, _, ok := serviceAccountRequester(csr)
+	if !ok {
+		return false, nil
+	}
+	cfg, err := dpfutils.GetDPFOperatorConfig(ctx, r.RuntimeClient)
+	if err != nil {
+		return false, fmt.Errorf("getting DPFOperatorConfig for the DPU agent bootstrap ServiceAccount namespace: %w", err)
+	}
+	return cutil.ServiceAccountTokenBootstrapEnabled(cfg) && namespace == cutil.DPUAgentServiceAccountNamespace(cfg), nil
+}
+
+// validateDPUAgentCSR checks that the CSR asks for a DPU agent client certificate of an existing
+// DPU, and, when a bootstrap ServiceAccount sent it, that DPF created the ServiceAccount for that
+// DPU.
 func (r *CSRReconciler) validateDPUAgentCSR(ctx context.Context, csr *certmanager.CertificateSigningRequest) error {
 	if csr.Spec.SignerName != certmanager.KubeAPIServerClientSignerName {
 		return newCSRValidationError("unsupported signer %q", csr.Spec.SignerName)
@@ -174,15 +225,57 @@ func (r *CSRReconciler) validateDPUAgentCSR(ctx context.Context, csr *certmanage
 		return newCSRValidationError("organization must be %q", providentity.DPUAgentOrganization)
 	}
 
-	dpu := &provisioningv1.DPU{}
-	if err := r.RuntimeClient.Get(ctx, client.ObjectKey{Namespace: hostutil.DPFNamespace, Name: dpuName}, dpu); err != nil {
-		if apierrors.IsNotFound(err) {
-			return newCSRValidationError("DPU %s/%s not found", hostutil.DPFNamespace, dpuName)
-		}
-		return fmt.Errorf("getting DPU %s/%s: %w", hostutil.DPFNamespace, dpuName, err)
+	if saNamespace, saName, ok := serviceAccountRequester(csr); ok {
+		return r.validateServiceAccountRequester(ctx, csr, saNamespace, saName, dpuName)
 	}
+	_, err = r.getDPU(ctx, hostutil.DPFNamespace, dpuName)
+	return err
+}
 
+// validateServiceAccountRequester checks that the bootstrap ServiceAccount that created the CSR
+// was minted for the DPU the CSR is for. The ServiceAccount labels name that DPU, and its UID
+// guards against a DPU deleted and recreated under the same name.
+func (r *CSRReconciler) validateServiceAccountRequester(ctx context.Context, csr *certmanager.CertificateSigningRequest, saNamespace, saName, dpuName string) error {
+	sa := &corev1.ServiceAccount{}
+	if err := r.RuntimeClient.Get(ctx, client.ObjectKey{Namespace: saNamespace, Name: saName}, sa); err != nil {
+		if apierrors.IsNotFound(err) {
+			return newCSRValidationError("bootstrap ServiceAccount %s/%s not found", saNamespace, saName)
+		}
+		return fmt.Errorf("getting bootstrap ServiceAccount %s/%s: %w", saNamespace, saName, err)
+	}
+	// The token authenticator sets the user UID to the ServiceAccount UID.
+	if csr.Spec.UID != string(sa.UID) {
+		return newCSRValidationError("requester UID %q does not match bootstrap ServiceAccount %s/%s", csr.Spec.UID, saNamespace, saName)
+	}
+	labeledName, labeledNamespace, labeledUID := sa.Labels[cutil.LabelDPUName], sa.Labels[cutil.LabelDPUNamespace], sa.Labels[cutil.LabelDPUUID]
+	if labeledName == "" || labeledNamespace == "" || labeledUID == "" {
+		return newCSRValidationError("bootstrap ServiceAccount %s/%s is not labeled with its DPU", saNamespace, saName)
+	}
+	if labeledName != dpuName {
+		return newCSRValidationError("bootstrap ServiceAccount %s/%s of DPU %s/%s may not request a certificate for DPU %s", saNamespace, saName, labeledNamespace, labeledName, dpuName)
+	}
+	dpu, err := r.getDPU(ctx, labeledNamespace, labeledName)
+	if err != nil {
+		return err
+	}
+	if string(dpu.UID) != labeledUID {
+		return newCSRValidationError("bootstrap ServiceAccount %s/%s was minted for another DPU %s/%s (UID %s)", saNamespace, saName, labeledNamespace, labeledName, labeledUID)
+	}
+	if !cutil.IsServiceAccountTokenDPU(dpu) {
+		return newCSRValidationError("DPU %s/%s does not use the %s identity mode", labeledNamespace, labeledName, provisioningv1.IdentityModeServiceAccountToken)
+	}
 	return nil
+}
+
+func (r *CSRReconciler) getDPU(ctx context.Context, namespace, name string) (*provisioningv1.DPU, error) {
+	dpu := &provisioningv1.DPU{}
+	if err := r.RuntimeClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, dpu); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, newCSRValidationError("DPU %s/%s not found", namespace, name)
+		}
+		return nil, fmt.Errorf("getting DPU %s/%s: %w", namespace, name, err)
+	}
+	return dpu, nil
 }
 
 func (r *CSRReconciler) updateApprovalCondition(

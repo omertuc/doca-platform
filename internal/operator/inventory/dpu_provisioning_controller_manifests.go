@@ -216,6 +216,7 @@ func (p *provisioningControllerObjects) GenerateManifests(_ context.Context, var
 	for i := range objsCopy {
 		ret = append(ret, objsCopy[i])
 	}
+	ret = append(ret, dpuAgentServiceAccountBootstrapObjects(vars, labelsToAdd)...)
 
 	return ret, nil
 }

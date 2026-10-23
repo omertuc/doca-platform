@@ -220,6 +220,9 @@ type DPFProvisioningVariables struct {
 	NodeEffectRemovalTimeout           *metav1.Duration
 	HostAgentDNSPolicy                 *corev1.DNSPolicy
 	DeploymentMode                     operatorv1.DeploymentMode
+	// DPUAgentServiceAccountNamespace is the namespace of the per-DPU bootstrap ServiceAccounts,
+	// set only when the ServiceAccountToken DPU Agent bootstrap method is selected.
+	DPUAgentServiceAccountNamespace string
 }
 
 type SFCControllerVariables struct {
@@ -406,6 +409,9 @@ func setBasicConfig(variables Variables, config *operatorv1.DPFOperatorConfig) V
 		NodeEffectRemovalTimeout:           config.Spec.ProvisioningController.NodeEffectRemovalTimeout,
 		HostAgentDNSPolicy:                 config.Spec.ProvisioningController.HostAgentDNSPolicy,
 		DeploymentMode:                     config.Spec.DeploymentMode,
+	}
+	if config.Spec.Security.DPUAgentBootstrapMethod() == operatorv1.DPUAgentBootstrapMethodServiceAccountToken {
+		variables.DPFProvisioningController.DPUAgentServiceAccountNamespace = config.Spec.Security.DPUAgentBootstrapServiceAccountNamespace()
 	}
 	if config.Spec.ProvisioningController.MultiDPUOperationsSyncWaitTime != nil {
 		variables.DPFProvisioningController.MultiDPUOperationsSyncWaitTime = config.Spec.ProvisioningController.MultiDPUOperationsSyncWaitTime.Duration

@@ -122,7 +122,7 @@ func ClusterConfig(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.
 	// Agent has already exchanged the bootstrap token for a client certificate by
 	// this point (needed to read the join secret). Revoke the management-cluster
 	// token so it cannot be reused after the DPU is in the cluster.
-	if err := cutil.DeleteDPUAgentBootstrapTokens(ctx, ctrlCtx.Client, dpu.Name, dpu.Namespace); err != nil {
+	if err := cutil.DeleteDPUAgentBootstrapCredentials(ctx, ctrlCtx.Client, dpu); err != nil {
 		err = fmt.Errorf("failed to delete DPU agent bootstrap tokens: %w", err)
 		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondDPUClusterReady.String(), err, "DeleteDPUAgentBootstrapTokensError", err.Error()))
 		return *state, err

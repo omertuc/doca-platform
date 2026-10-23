@@ -176,10 +176,7 @@ func Initializing(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.C
 			cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondInitialized.String(), err, "IdentityModeStampDeferred", err.Error()))
 			return *state, err
 		}
-		mode := provisioningv1.IdentityModeBootstrapToken
-		if cutil.SpiffeEnabled(cfg) {
-			mode = provisioningv1.IdentityModeSpiffe
-		}
+		mode := cutil.IdentityModeForConfig(cfg)
 		state.IdentityMode = ptr.To(mode)
 		logger.V(2).Info("stamped DPU identity mode", "identityMode", mode)
 	}

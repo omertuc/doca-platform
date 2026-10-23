@@ -22,9 +22,11 @@ import (
 	"os"
 	"path/filepath"
 
+	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
 	provisioningv1 "github.com/nvidia/doca-platform/api/provisioning/v1alpha1"
 	dutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/dpu/util"
 	cutil "github.com/nvidia/doca-platform/internal/provisioning/controllers/util"
+	dpfutils "github.com/nvidia/doca-platform/internal/utils"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -156,7 +158,8 @@ func prepareBF3BFB(ctx context.Context, dpu *provisioningv1.DPU, bfCFG []byte, s
 // the bootstrap token to embed in the agent kubeconfig. SPIFFE-mode DPUs authenticate
 // with a SPIRE-issued JWT-SVID rather than a bootstrap token, so they bind the literal
 // SPIFFE-ID subject and return an empty token (the cloud-init render then omits the
-// bootstrap kubeconfig).
+// bootstrap kubeconfig). Service-account-token DPUs get a ServiceAccount token in
+// place of the bootstrap token; the kubeconfig carries either the same way.
 func ensureRBAC(ctx context.Context, ctrlCtx *dutil.ControllerContext, dpu *provisioningv1.DPU, dpuDevice *provisioningv1.DPUDevice) (string, error) {
 	if err := cutil.EnsureDPUAgentRole(ctx, ctrlCtx.Client, dpu, dpuDevice, ctrlCtx.Options.CATrustBundleConfigMapName); err != nil {
 		return "", err
@@ -164,6 +167,24 @@ func ensureRBAC(ctx context.Context, ctrlCtx *dutil.ControllerContext, dpu *prov
 
 	if cutil.IsSpiffeDPU(dpu) {
 		return "", nil
+	}
+
+	if cutil.IsServiceAccountTokenDPU(dpu) {
+		cfg, err := dpfutils.GetDPFOperatorConfig(ctx, ctrlCtx.Client)
+		if err != nil {
+			return "", fmt.Errorf("getting DPFOperatorConfig for the bootstrap ServiceAccount namespace: %w", err)
+		}
+		// The operator only creates the namespace, and the binding that lets its ServiceAccounts
+		// request certificates, for that method.
+		if !cutil.ServiceAccountTokenBootstrapEnabled(cfg) {
+			return "", fmt.Errorf("DPU %s is in %s identity mode but spec.security.dpuAgentBootstrap.method is not %s",
+				dpu.Name, provisioningv1.IdentityModeServiceAccountToken, operatorv1.DPUAgentBootstrapMethodServiceAccountToken)
+		}
+		token, err := cutil.CreateDPUAgentServiceAccountToken(ctx, ctrlCtx.Client, dpu, cutil.DPUAgentServiceAccountNamespace(cfg))
+		if err != nil {
+			return "", fmt.Errorf("creating DPU agent bootstrap ServiceAccount token: %w", err)
+		}
+		return token, nil
 	}
 
 	token, err := cutil.CreateDPUAgentBootstrapToken(ctx, ctrlCtx.Client, dpu)

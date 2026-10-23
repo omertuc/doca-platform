@@ -134,7 +134,7 @@ func Deleting(ctx context.Context, dpu *provisioningv1.DPU, ctrlCtx *dutil.Contr
 		}
 	}
 
-	if err := cutil.DeleteDPUAgentBootstrapTokens(ctx, ctrlCtx.Client, dpu.Name, dpu.Namespace); err != nil {
+	if err := cutil.DeleteDPUAgentBootstrapCredentials(ctx, ctrlCtx.Client, dpu); err != nil {
 		err = fmt.Errorf("failed to delete bootstrap tokens: %w", err)
 		cutil.SetDPUCondition(state, cutil.NewCondition(provisioningv1.DPUCondDeleting.String(), err, "DeleteBootstrapTokensError", err.Error()))
 		return *state, err

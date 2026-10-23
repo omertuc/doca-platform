@@ -261,7 +261,9 @@ func createManager(flags *cliFlags) (ctrl.Manager, *rest.Config) {
 		HealthProbeBindAddress: flags.probeAddr,
 		Client: client.Options{
 			Cache: &client.CacheOptions{
-				DisableFor: []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}},
+				// ServiceAccounts are only read for DPU agent bootstrap, in one namespace; caching
+				// them would watch every ServiceAccount of the cluster.
+				DisableFor: []client.Object{&corev1.Secret{}, &corev1.ConfigMap{}, &corev1.ServiceAccount{}},
 			},
 		},
 		Cache: cache.Options{
