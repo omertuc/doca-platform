@@ -815,6 +815,7 @@ spec:
                 enum:
                 - spiffe
                 - bootstrap-token
+                - service-account-token
                 type: string
               observedGeneration:
                 description: ObservedGeneration records the Generation observed on

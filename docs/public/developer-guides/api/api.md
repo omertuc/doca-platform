@@ -488,6 +488,44 @@ _Appears in:_
 | `security` _[SecurityStatus](#securitystatus)_ | Security records what the operator has rolled out for the security-related components it<br />manages. It is grouped the way spec.security groups their configuration, so that what was<br />asked for and what is in effect are read at the same path. |  | Optional: \{\} <br /> |
 
 
+#### DPUAgentBootstrapConfiguration
+
+
+
+DPUAgentBootstrapConfiguration configures how the DPU Agent authenticates to the kube-apiserver
+to request its first client certificate. After that, it authenticates with that certificate
+whichever method issued it.
+
+
+
+_Appears in:_
+- [SecurityConfiguration](#securityconfiguration)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `method` _[DPUAgentBootstrapMethod](#dpuagentbootstrapmethod)_ | method is BootstrapToken (the default) or ServiceAccountToken. Use ServiceAccountToken when<br />the kube-apiserver does not accept bootstrap tokens (no --enable-bootstrap-token-auth). The<br />DPU controller then creates a ServiceAccount per DPU in serviceAccountNamespace and puts a<br />short-lived token of it into the DPU's bootstrap kubeconfig.<br />ServiceAccountToken cannot be combined with spec.security.spiffe, and once set, it cannot be<br />changed back. | BootstrapToken | Enum: [BootstrapToken ServiceAccountToken] <br />Optional: \{\} <br /> |
+| `serviceAccountNamespace` _string_ | serviceAccountNamespace is the namespace of the per-DPU ServiceAccounts. The DPF Operator<br />creates it and grants every ServiceAccount in it the right to request DPU Agent client<br />certificates, so it must be dedicated to them: nothing else may run or create ServiceAccounts<br />there. Only used by the ServiceAccountToken method, and immutable while it is selected. | dpf-dpu-agent-bootstrap | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` <br />Optional: \{\} <br /> |
+
+
+#### DPUAgentBootstrapMethod
+
+_Underlying type:_ _string_
+
+DPUAgentBootstrapMethod is how the DPU Agent authenticates the request for its first client
+certificate.
+
+_Validation:_
+- Enum: [BootstrapToken ServiceAccountToken]
+
+_Appears in:_
+- [DPUAgentBootstrapConfiguration](#dpuagentbootstrapconfiguration)
+
+| Field | Description |
+| --- | --- |
+| `BootstrapToken` | DPUAgentBootstrapMethodBootstrapToken uses a per-DPU bootstrap token. It requires the<br />kube-apiserver to run with --enable-bootstrap-token-auth.<br /> |
+| `ServiceAccountToken` | DPUAgentBootstrapMethodServiceAccountToken uses a short-lived token of a per-DPU ServiceAccount<br />instead of a bootstrap token, which does not depend on --enable-bootstrap-token-auth.<br /> |
+
+
 #### DPUClusterImagesConfiguration
 
 
@@ -1535,6 +1573,7 @@ _Appears in:_
 | `privilegedPodEnforcement` _boolean_ | PrivilegedPodEnforcement controls whether privileged pods are rejected<br />unless explicitly allowed by the workload API. The DPUService controller<br />currently implements this by applying the PrivilegedPodEnforcement<br />ValidatingAdmissionPolicy to DPUService workloads.<br />Setting it to false does not fully opt out of enforcement: the policy and its<br />binding are kept, but the binding is switched from Deny to Audit, so privileged<br />pods are no longer denied and are only recorded in the audit log. The allowlist<br />is kept populated so the audit log only flags pods that would otherwise be<br />denied.<br />The objects are intentionally not deleted to avoid a Kubernetes paramRef<br />informer bug (https://github.com/kubernetes/kubernetes/issues/133827).<br />Defaults to true. | true | Optional: \{\} <br /> |
 | `kata` _[KataContainersConfiguration](#katacontainersconfiguration)_ | Kata is the configuration for Kata Containers.<br />Kata Containers provides VM-based isolation for untrusted workloads on DPU nodes.<br />This component is disabled by default; set disable to false to enable. |  | Optional: \{\} <br /> |
 | `spiffe` _[SPIFFEConfiguration](#spiffeconfiguration)_ | spiffe configures the SPIFFE-based DPU Agent identity flow. Edits are accepted post-bootstrap<br />but do NOT retro-apply to already-provisioned DPUs. |  | Optional: \{\} <br /> |
+| `dpuAgentBootstrap` _[DPUAgentBootstrapConfiguration](#dpuagentbootstrapconfiguration)_ | dpuAgentBootstrap selects how the DPU Agent authenticates to the kube-apiserver to request<br />its first client certificate. The ServiceAccountToken method cannot be combined with spiffe,<br />whose DPU Agents do not request one. Like spiffe, edits apply to DPUs initialized afterwards,<br />never to DPUs that already have an identity mode. |  | Optional: \{\} <br /> |
 | `vaultKMS` _[VaultKMSConfiguration](#vaultkmsconfiguration)_ | VaultKMS is the configuration for the standalone Vault/OpenBao KMS plugin component.<br />It is deployed as a DaemonSet on control-plane nodes and is disabled by default.<br />The plugin is used for encryption at rest for DPUClusters. |  | Optional: \{\} <br /> |
 | `certManagement` _[CertManagementConfiguration](#certmanagementconfiguration)_ | CertManagement configures the certificate authority that the provisioning certificates of DPF<br />chain up to, and the trust bundle their consumers validate peers against. If unset, DPF signs<br />them with a self-signed CA of its own. |  | Optional: \{\} <br /> |
 
@@ -3388,7 +3427,7 @@ _Appears in:_
 | `deploymentMode` _[DeploymentMode](#deploymentmode)_ | DeploymentMode is copied from DPFOperatorConfig.spec.deploymentMode by the controller.<br />This field is read-only for users. |  | Enum: [zero-trust host-trusted] <br />Optional: \{\} <br /> |
 | `hostless` _boolean_ | Hostless indicates that the DPU is attached to a system-managed synthetic<br />DPUNode rather than a physical host. |  | Optional: \{\} <br /> |
 | `secureBoot` _[SecureBootStatus](#securebootstatus)_ | SecureBoot indicates the current UEFI Secure Boot state. |  | Optional: \{\} <br /> |
-| `identityMode` _[IdentityMode](#identitymode)_ | IdentityMode records which authentication mechanism the DPU Agent uses to reach the<br />management-cluster kube-apiserver. Stamped exactly once by the DPU controller during phase<br />Initializing (nil guard); immutable thereafter. Pre-SPIFFE legacy DPUs have IdentityMode<br />unset (nil) which consumers MUST treat semantically as bootstrap-token. |  | Enum: [spiffe bootstrap-token] <br />Optional: \{\} <br /> |
+| `identityMode` _[IdentityMode](#identitymode)_ | IdentityMode records which authentication mechanism the DPU Agent uses to reach the<br />management-cluster kube-apiserver. Stamped exactly once by the DPU controller during phase<br />Initializing (nil guard); immutable thereafter. Pre-SPIFFE legacy DPUs have IdentityMode<br />unset (nil) which consumers MUST treat semantically as bootstrap-token. |  | Enum: [spiffe bootstrap-token service-account-token] <br />Optional: \{\} <br /> |
 | `redfishTaskId` _string_ | The task ID of the last task performed on the DPU BMC |  | Optional: \{\} <br /> |
 
 
@@ -3708,6 +3747,7 @@ _Appears in:_
 | --- | --- |
 | `spiffe` | IdentityModeSpiffe indicates the DPU Agent authenticates with a SPIFFE-issued JWT-SVID.<br /> |
 | `bootstrap-token` | IdentityModeBootstrapToken indicates the DPU Agent authenticates with a kubeadm bootstrap token.<br />An unset (nil) IdentityMode is treated semantically as bootstrap-token; no sentinel is declared<br />for the unset case deliberately, to force explicit handling by consumers.<br /> |
+| `service-account-token` | IdentityModeServiceAccountToken indicates the DPU Agent bootstraps its client certificate with a<br />short-lived token of a per-DPU ServiceAccount, for kube-apiservers without bootstrap token<br />authentication. After the bootstrap it authenticates exactly as a bootstrap-token DPU does.<br /> |
 
 
 #### K8sCluster

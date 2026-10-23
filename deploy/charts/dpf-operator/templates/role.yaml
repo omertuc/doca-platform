@@ -52,6 +52,9 @@ rules:
   - namespaces
   verbs:
   - create
+  - delete
+  - get
+  - patch
 - apiGroups:
   - admissionregistration.k8s.io
   resources:

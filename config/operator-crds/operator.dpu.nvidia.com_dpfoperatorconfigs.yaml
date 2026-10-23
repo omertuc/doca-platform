@@ -2049,6 +2049,43 @@ spec:
                         pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                     type: object
+                  dpuAgentBootstrap:
+                    description: |-
+                      dpuAgentBootstrap selects how the DPU Agent authenticates to the kube-apiserver to request
+                      its first client certificate. The ServiceAccountToken method cannot be combined with spiffe,
+                      whose DPU Agents do not request one. Like spiffe, edits apply to DPUs initialized afterwards,
+                      never to DPUs that already have an identity mode.
+                    properties:
+                      method:
+                        default: BootstrapToken
+                        description: |-
+                          method is BootstrapToken (the default) or ServiceAccountToken. Use ServiceAccountToken when
+                          the kube-apiserver does not accept bootstrap tokens (no --enable-bootstrap-token-auth). The
+                          DPU controller then creates a ServiceAccount per DPU in serviceAccountNamespace and puts a
+                          short-lived token of it into the DPU's bootstrap kubeconfig.
+                          ServiceAccountToken cannot be combined with spec.security.spiffe, and once set, it cannot be
+                          changed back.
+                        enum:
+                        - BootstrapToken
+                        - ServiceAccountToken
+                        type: string
+                      serviceAccountNamespace:
+                        default: dpf-dpu-agent-bootstrap
+                        description: |-
+                          serviceAccountNamespace is the namespace of the per-DPU ServiceAccounts. The DPF Operator
+                          creates it and grants every ServiceAccount in it the right to request DPU Agent client
+                          certificates, so it must be dedicated to them: nothing else may run or create ServiceAccounts
+                          there. Only used by the ServiceAccountToken method, and immutable while it is selected.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: 'serviceAccountNamespace must be a dedicated namespace:
+                            default and the kube- and openshift- prefixes are reserved'
+                          rule: self != 'default' && !self.startsWith('kube-') &&
+                            !self.startsWith('openshift-')
+                    type: object
                   kata:
                     description: |-
                       Kata is the configuration for Kata Containers.
@@ -2638,6 +2675,12 @@ spec:
                     - transit
                     type: object
                 type: object
+                x-kubernetes-validations:
+                - message: 'spiffe and dpuAgentBootstrap.method ServiceAccountToken
+                    are mutually exclusive: SPIFFE-mode DPU Agents authenticate with
+                    a JWT-SVID and do not bootstrap with a token'
+                  rule: '!has(self.spiffe) || !has(self.dpuAgentBootstrap) || self.dpuAgentBootstrap.method
+                    != ''ServiceAccountToken'''
               serviceSetController:
                 description: ServiceSetController is the configuration for the ServiceSetController
                 properties:
@@ -3115,6 +3158,25 @@ spec:
                 == (has(oldSelf.security) && has(oldSelf.security.certManagement)
                 && has(oldSelf.security.certManagement.trustBundleConfigMapName) ?
                 oldSelf.security.certManagement.trustBundleConfigMapName : ''dpf-ca-trust-bundle'')'
+            - message: spec.security.dpuAgentBootstrap.method cannot be changed from
+                ServiceAccountToken once set; DPUs initialized with it mint their
+                bootstrap tokens from this configuration whenever they are provisioned
+                again. Change it by deleting and recreating DPFOperatorConfig (DR
+                escape hatch); existing DPUs require re-provisioning.
+              rule: '!(has(oldSelf.security) && has(oldSelf.security.dpuAgentBootstrap)
+                && oldSelf.security.dpuAgentBootstrap.method == ''ServiceAccountToken'')
+                || (has(self.security) && has(self.security.dpuAgentBootstrap) &&
+                self.security.dpuAgentBootstrap.method == ''ServiceAccountToken'')'
+            - message: 'spec.security.dpuAgentBootstrap.serviceAccountNamespace is
+                immutable while method is ServiceAccountToken: the ServiceAccounts
+                of DPUs that have not bootstrapped yet live there, and the CSR approver
+                only trusts the configured namespace'
+              rule: '!(has(oldSelf.security) && has(oldSelf.security.dpuAgentBootstrap)
+                && oldSelf.security.dpuAgentBootstrap.method == ''ServiceAccountToken'')
+                || (has(self.security) && has(self.security.dpuAgentBootstrap) &&
+                has(self.security.dpuAgentBootstrap.serviceAccountNamespace) ? self.security.dpuAgentBootstrap.serviceAccountNamespace
+                : ''dpf-dpu-agent-bootstrap'') == (has(oldSelf.security.dpuAgentBootstrap.serviceAccountNamespace)
+                ? oldSelf.security.dpuAgentBootstrap.serviceAccountNamespace : ''dpf-dpu-agent-bootstrap'')'
           status:
             description: DPFOperatorConfigStatus defines the observed state of DPFOperatorConfig
             properties:
