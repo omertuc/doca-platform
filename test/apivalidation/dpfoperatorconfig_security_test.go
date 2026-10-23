@@ -104,3 +104,52 @@ func TestGetCATrustBundleConfigMapName(t *testing.T) {
 		})
 	}
 }
+
+// TestDPUAgentBootstrapDefaults verifies that the helpers the provisioning controller and the
+// operator read the DPU Agent bootstrap configuration through fall back to the defaults of the
+// CRD, so a config created before the field existed keeps bootstrap tokens.
+func TestDPUAgentBootstrapDefaults(t *testing.T) {
+	tests := []struct {
+		name          string
+		sec           *operatorv1.SecurityConfiguration
+		wantMethod    operatorv1.DPUAgentBootstrapMethod
+		wantNamespace string
+	}{
+		{
+			name:          "nil SecurityConfiguration",
+			wantMethod:    operatorv1.DPUAgentBootstrapMethodBootstrapToken,
+			wantNamespace: operatorv1.DefaultDPUAgentBootstrapServiceAccountNamespace,
+		},
+		{
+			name:          "nil DPUAgentBootstrap",
+			sec:           &operatorv1.SecurityConfiguration{},
+			wantMethod:    operatorv1.DPUAgentBootstrapMethodBootstrapToken,
+			wantNamespace: operatorv1.DefaultDPUAgentBootstrapServiceAccountNamespace,
+		},
+		{
+			name:          "empty DPUAgentBootstrap",
+			sec:           &operatorv1.SecurityConfiguration{DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{}},
+			wantMethod:    operatorv1.DPUAgentBootstrapMethodBootstrapToken,
+			wantNamespace: operatorv1.DefaultDPUAgentBootstrapServiceAccountNamespace,
+		},
+		{
+			name: "ServiceAccountToken in a namespace of its own",
+			sec: &operatorv1.SecurityConfiguration{DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{
+				Method:                  operatorv1.DPUAgentBootstrapMethodServiceAccountToken,
+				ServiceAccountNamespace: "dpu-agent-bootstrap",
+			}},
+			wantMethod:    operatorv1.DPUAgentBootstrapMethodServiceAccountToken,
+			wantNamespace: "dpu-agent-bootstrap",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.sec.DPUAgentBootstrapMethod(); got != tt.wantMethod {
+				t.Errorf("DPUAgentBootstrapMethod() = %v, want %v", got, tt.wantMethod)
+			}
+			if got := tt.sec.DPUAgentBootstrapServiceAccountNamespace(); got != tt.wantNamespace {
+				t.Errorf("DPUAgentBootstrapServiceAccountNamespace() = %v, want %v", got, tt.wantNamespace)
+			}
+		})
+	}
+}

@@ -1,0 +1,23 @@
+# e2e config for the ServiceAccountToken variant of the mock-dpuagent suite: as
+# config-mock-dpuagent.yaml, with the DPU agents bootstrapping with ServiceAccount tokens.
+# Run with: make test-e2e-mock-dpuagent-sa-token
+dpfOperatorConfig: "../objects/infrastructure/operatorconfig-mock-dpuagent-sa-token.yaml"
+provisioningControllerPVC: "../objects/infrastructure/pvc-quick.yaml"
+dpuClusters:
+  - "../objects/infrastructure/dpucluster.yaml"
+# The suite builds its own BFB, BlueFieldSoftware, DPUFlavor, DPUSet and DPUDiscovery objects;
+# the DPUService objects below are required by the config schema but never created.
+dpuSet: "../objects/infrastructure/dpuset-zerotrust.yaml"
+dpuServiceInterface: "../objects/application/dpuserviceinterface_service_type.yaml"
+dpuServiceChain: "../objects/application/dpuservicechain.yaml"
+dpuDeployment: "../objects/application/dpudeployment-zerotrust.yaml"
+dpuServiceCredentialRequest: "../objects/application/dpuservicecredentialrequest.yaml"
+dpuServiceConfiguration: "../objects/application/dpuserviceconfiguration.yaml"
+ipPoolDPUServiceIPAM: "../objects/application/dpuserviceipam_subnet.yaml"
+cidrPoolDPUServiceIPAM: "../objects/application/dpuserviceipam_cidr.yaml"
+dpuService: "../objects/application/dpuservice.yaml"
+dpuServiceTemplate: "../objects/application/dpuservicetemplate.yaml"
+# One DPUDevice/DPUNode per mock-dpuagent pod; the suite reads the actual replica count from the
+# mock-dpuagent Deployment, so these only satisfy the schema.
+numberOfDPUNodes: 1
+numberOfDPUsPerNode: 1

@@ -68,9 +68,9 @@ var _ = Describe("Phase Initializing", func() {
 	}
 
 	// ensureSingleDPFOperatorConfig deletes any existing configs and creates exactly one in
-	// the singleton namespace, optionally enabling SPIFFE. The DPU identity-mode stamp reads
-	// this config to decide between bootstrap-token and spiffe.
-	ensureSingleDPFOperatorConfig := func(spiffe bool) {
+	// the singleton namespace, optionally enabling SPIFFE and the ServiceAccountToken bootstrap
+	// method. Initializing reads this config to decide which identity mode to set on the DPU.
+	ensureSingleDPFOperatorConfig := func(spiffe bool, serviceAccountToken ...bool) {
 		deleteAllDPFOperatorConfigs()
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: operatorcontroller.DefaultDPFOperatorConfigSingletonNamespace}}
 		Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, ns))).To(Succeed())
@@ -114,6 +114,14 @@ var _ = Describe("Phase Initializing", func() {
 							Namespace: "spire-system",
 						},
 					},
+				}
+			}
+			if len(serviceAccountToken) > 0 && serviceAccountToken[0] {
+				if cfg.Spec.Security == nil {
+					cfg.Spec.Security = &operatorv1.SecurityConfiguration{}
+				}
+				cfg.Spec.Security.DPUAgentBootstrap = &operatorv1.DPUAgentBootstrapConfiguration{
+					Method: operatorv1.DPUAgentBootstrapMethodServiceAccountToken,
 				}
 			}
 			return nil
@@ -606,6 +614,27 @@ var _ = Describe("Phase Initializing", func() {
 			Expect(status.Phase).To(Equal(provisioningv1.DPUPending))
 			Expect(status.IdentityMode).NotTo(BeNil())
 			Expect(*status.IdentityMode).To(Equal(provisioningv1.IdentityModeSpiffe))
+		})
+
+		It("sets the service-account-token identity mode when the ServiceAccountToken bootstrap method is selected", func() {
+			ensureSingleDPFOperatorConfig(false, true)
+			dpu, ctrlCtx := newReadyDPU()
+
+			status, err := state.Initializing(ctx, dpu, ctrlCtx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.Phase).To(Equal(provisioningv1.DPUPending))
+			Expect(status.IdentityMode).NotTo(BeNil())
+			Expect(*status.IdentityMode).To(Equal(provisioningv1.IdentityModeServiceAccountToken))
+		})
+
+		It("keeps bootstrap-token DPUs when the ServiceAccountToken bootstrap method is selected for new DPUs", func() {
+			ensureSingleDPFOperatorConfig(false, true)
+			dpu, ctrlCtx := newReadyDPU()
+			dpu.Status.IdentityMode = ptr.To(provisioningv1.IdentityModeBootstrapToken)
+
+			status, err := state.Initializing(ctx, dpu, ctrlCtx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(*status.IdentityMode).To(Equal(provisioningv1.IdentityModeBootstrapToken))
 		})
 
 		It("requeues without stamping or advancing when no DPFOperatorConfig exists", func() {

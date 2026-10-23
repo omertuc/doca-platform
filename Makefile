@@ -624,11 +624,13 @@ TEST_CLUSTER_NAME := dpf-test
 # The DPU kind cluster of the mock-dpuagent e2e, see test-e2e-mock-dpuagent.
 TEST_DPU_CLUSTER_NAME := dpf-test-dpu
 ADD_CONTROL_PLANE_TAINTS ?= true
+# Set to true to run the kind kube-apiserver without bootstrap token authentication.
+TEST_ENV_DISABLE_BOOTSTRAP_TOKEN_AUTH ?= false
 TEST_DEPLOY_PREREQS_NAMESPACE ?= dpf-operator-system
 .PHONY: test-env-e2e
 test-env-e2e: kind helm ## Setup a Kind Kubernetes environment to run tests.
 	# Create a kind cluster to host the test.
-	CLUSTER_NAME=$(TEST_CLUSTER_NAME) KIND_BIN=$(KIND) ADD_CONTROL_PLANE_TAINTS=$(ADD_CONTROL_PLANE_TAINTS) $(CURDIR)/hack/scripts/kind-install.sh
+	CLUSTER_NAME=$(TEST_CLUSTER_NAME) KIND_BIN=$(KIND) ADD_CONTROL_PLANE_TAINTS=$(ADD_CONTROL_PLANE_TAINTS) DISABLE_BOOTSTRAP_TOKEN_AUTH=$(TEST_ENV_DISABLE_BOOTSTRAP_TOKEN_AUTH) $(CURDIR)/hack/scripts/kind-install.sh
 
 	$(KUBECTL) get namespace dpf-operator-system || $(KUBECTL) create namespace dpf-operator-system
 
@@ -782,6 +784,13 @@ test-e2e-mock-dpuagent: kind helm docker-build-mock-dpuagent ## Build and deploy
 		$(KIND) create cluster --name $(TEST_DPU_CLUSTER_NAME) --image kindest/node:$(KIND_KUBERNETES_VERSION) --kubeconfig $(TEST_DPU_CLUSTER_KUBECONFIG)
 	$(KIND) export kubeconfig --name $(TEST_DPU_CLUSTER_NAME) --kubeconfig $(TEST_DPU_CLUSTER_KUBECONFIG)
 	MOCK_DPU_CLUSTER_KUBECONFIG=$(TEST_DPU_CLUSTER_KUBECONFIG) MOCK_DPU_SKIP_SECURE_BOOT=$(MOCK_DPUAGENT_SKIP_SECURE_BOOT) $(MAKE) test-e2e E2E_TEST_ARGS='$(MOCK_DPUAGENT_E2E_TEST_ARGS)'
+
+# The mock-dpuagent e2e with the DPU agents bootstrapping with ServiceAccount tokens. Run it against a
+# management cluster set up with TEST_ENV_DISABLE_BOOTSTRAP_TOKEN_AUTH=true to show that the DPU agent
+# bootstrap does not depend on bootstrap token authentication.
+.PHONY: test-e2e-mock-dpuagent-sa-token
+test-e2e-mock-dpuagent-sa-token: ## Run the mock-dpuagent e2e tests with the ServiceAccountToken DPU agent bootstrap method.
+	$(MAKE) test-e2e-mock-dpuagent MOCK_DPUAGENT_E2E_TEST_ARGS='-ginkgo.label-filter="MockDPU && !SDN && !DPFVPCOVN && !WeaveBF3" -e2e.config=./config-mock-dpuagent-sa-token.yaml'
 
 .PHONY: generate-htmlreports
 generate-htmlreports: binary-dpfdev ## Generate HTML artifact viewers for all resource dumps under ARTIFACTS_DIR

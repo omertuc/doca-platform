@@ -31,6 +31,7 @@ func dpuWithIdentityMode(mode *provisioningv1.IdentityMode) *provisioningv1.DPU 
 var _ = Describe("SPIFFE helpers", func() {
 	spiffe := provisioningv1.IdentityModeSpiffe
 	bootstrap := provisioningv1.IdentityModeBootstrapToken
+	serviceAccountToken := provisioningv1.IdentityModeServiceAccountToken
 
 	DescribeTable("SpiffeEnabled",
 		func(cfg *operatorv1.DPFOperatorConfig, want bool) {
@@ -58,6 +59,52 @@ var _ = Describe("SPIFFE helpers", func() {
 		Entry("spiffe mode", dpuWithIdentityMode(&spiffe), true),
 	)
 
+	DescribeTable("IsServiceAccountTokenDPU",
+		func(dpu *provisioningv1.DPU, want bool) {
+			Expect(IsServiceAccountTokenDPU(dpu)).To(Equal(want))
+		},
+		Entry("nil dpu", nil, false),
+		Entry("nil identity mode (legacy)", dpuWithIdentityMode(nil), false),
+		Entry("bootstrap-token mode", dpuWithIdentityMode(&bootstrap), false),
+		Entry("spiffe mode", dpuWithIdentityMode(&spiffe), false),
+		Entry("service-account-token mode", dpuWithIdentityMode(&serviceAccountToken), true),
+	)
+
+	DescribeTable("IdentityModeForConfig",
+		func(cfg *operatorv1.DPFOperatorConfig, want provisioningv1.IdentityMode) {
+			Expect(IdentityModeForConfig(cfg)).To(Equal(want))
+		},
+		Entry("nil config", nil, bootstrap),
+		Entry("nil security", &operatorv1.DPFOperatorConfig{}, bootstrap),
+		Entry("BootstrapToken method", configWithSecurity(&operatorv1.SecurityConfiguration{
+			DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{Method: operatorv1.DPUAgentBootstrapMethodBootstrapToken},
+		}), bootstrap),
+		Entry("ServiceAccountToken method", configWithSecurity(&operatorv1.SecurityConfiguration{
+			DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{Method: operatorv1.DPUAgentBootstrapMethodServiceAccountToken},
+		}), serviceAccountToken),
+		Entry("spiffe", configWithSecurity(&operatorv1.SecurityConfiguration{
+			SPIFFE: &operatorv1.SPIFFEConfiguration{},
+		}), spiffe),
+		Entry("spiffe with the BootstrapToken method", configWithSecurity(&operatorv1.SecurityConfiguration{
+			SPIFFE:            &operatorv1.SPIFFEConfiguration{},
+			DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{Method: operatorv1.DPUAgentBootstrapMethodBootstrapToken},
+		}), spiffe),
+	)
+
+	DescribeTable("DPUAgentServiceAccountNamespace",
+		func(cfg *operatorv1.DPFOperatorConfig, want string) {
+			Expect(DPUAgentServiceAccountNamespace(cfg)).To(Equal(want))
+		},
+		Entry("nil config", nil, operatorv1.DefaultDPUAgentBootstrapServiceAccountNamespace),
+		Entry("nil security", &operatorv1.DPFOperatorConfig{}, operatorv1.DefaultDPUAgentBootstrapServiceAccountNamespace),
+		Entry("unset namespace", configWithSecurity(&operatorv1.SecurityConfiguration{
+			DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{Method: operatorv1.DPUAgentBootstrapMethodServiceAccountToken},
+		}), operatorv1.DefaultDPUAgentBootstrapServiceAccountNamespace),
+		Entry("configured namespace, whatever the method", configWithSecurity(&operatorv1.SecurityConfiguration{
+			DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{ServiceAccountNamespace: "dpu-bootstrap"},
+		}), "dpu-bootstrap"),
+	)
+
 	DescribeTable("IsBootstrapTokenDPU",
 		func(dpu *provisioningv1.DPU, want bool) {
 			Expect(IsBootstrapTokenDPU(dpu)).To(Equal(want))
@@ -66,5 +113,10 @@ var _ = Describe("SPIFFE helpers", func() {
 		Entry("nil identity mode (legacy treated as bootstrap-token)", dpuWithIdentityMode(nil), true),
 		Entry("bootstrap-token mode", dpuWithIdentityMode(&bootstrap), true),
 		Entry("spiffe mode", dpuWithIdentityMode(&spiffe), false),
+		Entry("service-account-token mode", dpuWithIdentityMode(&serviceAccountToken), false),
 	)
 })
+
+func configWithSecurity(security *operatorv1.SecurityConfiguration) *operatorv1.DPFOperatorConfig {
+	return &operatorv1.DPFOperatorConfig{Spec: operatorv1.DPFOperatorConfigSpec{Security: security}}
+}

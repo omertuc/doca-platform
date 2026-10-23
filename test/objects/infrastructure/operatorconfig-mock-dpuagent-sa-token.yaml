@@ -1,0 +1,58 @@
+# DPFOperatorConfig for the ServiceAccountToken variant of the mock-dpuagent e2e suite
+# (test/e2e/mock_dpuagent_test.go): identical to operatorconfig-mock-dpuagent.yaml, except that the
+# DPU agents bootstrap with ServiceAccount tokens instead of bootstrap tokens, so the suite also
+# passes against a kube-apiserver without --enable-bootstrap-token-auth.
+apiVersion: operator.dpu.nvidia.com/v1alpha1
+kind: DPFOperatorConfig
+metadata:
+  name: dpfoperatorconfig
+  namespace: dpf-operator-system
+spec:
+  deploymentMode: zero-trust
+  imagePullSecrets:
+    - dpf-pull-secret
+  provisioningController:
+    replicas: 1
+    bfbPVCName: bfb-pvc
+    installInterface:
+      installViaRedfish:
+        skipDPUNodeDiscovery: false
+        # The mock BMC accepts ResetToDefaults, so the full DPUDevice initialization path
+        # (factory reset -> settle -> password init) is exercised.
+        discoveredDPUDeviceBMCFactoryResetPolicy: OnInitialization
+  dpuServiceController:
+    replicas: 1
+  staticClusterManager:
+    disable: false
+    replicas: 1
+  kamajiClusterManager:
+    disable: true
+  nodeSRIOVDevicePluginController:
+    disable: true
+  dpuDetector:
+    disable: true
+  monitoring:
+    disable: true
+  serviceSetController:
+    disable: true
+  sfcController:
+    disable: true
+  multus:
+    disable: true
+  sriovDevicePlugin:
+    disable: true
+  flannel:
+    disable: true
+  ovsCNI:
+    disable: true
+  nvipam:
+    disable: true
+  cniInstaller:
+    disable: true
+  coreDNS:
+    disable: true
+  security:
+    kata:
+      disable: true
+    dpuAgentBootstrap:
+      method: ServiceAccountToken

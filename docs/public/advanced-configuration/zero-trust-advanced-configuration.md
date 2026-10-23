@@ -235,6 +235,14 @@ clearing the `Initialized` condition. This recovery does not factory-reset the B
 continues to fail, verify that the BMC is reachable at `spec.bmcIp` and that the configured BMC
 credential is valid.
 
+# Clusters Without Bootstrap Token Authentication
+
+The DPU Agent gets its first client certificate with a bootstrap token, which the kube-apiserver
+only accepts with `--enable-bootstrap-token-auth`. On clusters without it, such as OpenShift, set
+`DPFOperatorConfig.spec.security.dpuAgentBootstrap.method` to `ServiceAccountToken` so that DPF
+hands the DPU Agent a token of a per-DPU ServiceAccount instead. See
+[DPU Agent Bootstrap with ServiceAccount Tokens](dpu-agent-bootstrap.md).
+
 # SPIFFE Workload Identity
 
 In Zero Trust mode the DPU Agent can authenticate to the management-cluster Kubernetes API server

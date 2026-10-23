@@ -197,6 +197,7 @@ reads it.
 |-----------------------|---------|
 | `spiffe` | The DPU Agent authenticates with a SPIRE-issued JWT-SVID. |
 | `bootstrap-token` | The DPU Agent authenticates with a kubeadm bootstrap token. |
+| `service-account-token` | The DPU Agent authenticates with a ServiceAccount token, see [DPU Agent Bootstrap with ServiceAccount Tokens](dpu-agent-bootstrap.md). Treated like `bootstrap-token` here. |
 | unset | Legacy DPU provisioned before SPIFFE existed. Treated as `bootstrap-token`. |
 
 Because the stamp happens at initialization, enabling SPIFFE affects **newly provisioned DPUs only**.

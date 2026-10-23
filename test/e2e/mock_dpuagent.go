@@ -675,8 +675,13 @@ func verifyMockDPUsProvisioned(ctx context.Context, env *mockDPUEnv, dpuType pro
 
 	approvedCNs := sets.New[string]()
 	for _, cl := range []client.Client{env.client, env.dpuClusterClient} {
-		approvedCNs = approvedCNs.Union(approvedCSRCommonNames(ctx, cl))
+		approvedCNs = approvedCNs.Union(sets.KeySet(approvedCSRRequesters(ctx, cl)))
 	}
+	// The DPU agent certificates are requested from the management cluster, by the bootstrap
+	// credential of the identity mode the operator config selects.
+	agentRequesters := approvedCSRRequesters(ctx, env.client)
+	wantIdentityMode := cutil.IdentityModeForConfig(input.config)
+	saNamespace := cutil.DPUAgentServiceAccountNamespace(input.config)
 
 	for i := range dpus.Items {
 		dpu := &dpus.Items[i]
@@ -712,6 +717,12 @@ func verifyMockDPUsProvisioned(ctx context.Context, env *mockDPUEnv, dpuType pro
 		// Identities: the agent certificate in the management cluster (approved by the DPF csr
 		// controller) and the kubelet certificate in the DPU cluster (approved by kubeadm's RBAC).
 		Expect(approvedCNs.Has(providentity.DPUAgentUsername(dpu.Name))).To(BeTrue(), "no approved CSR for %s", providentity.DPUAgentUsername(dpu.Name))
+		Expect(ptr.Deref(dpu.Status.IdentityMode, "")).To(Equal(wantIdentityMode), "DPU %s identity mode", dpu.Name)
+		if wantIdentityMode == provisioningv1.IdentityModeServiceAccountToken {
+			saPrefix := "system:serviceaccount:" + saNamespace + ":"
+			Expect(agentRequesters[providentity.DPUAgentUsername(dpu.Name)].UnsortedList()).To(ContainElement(HavePrefix(saPrefix)),
+				"the agent certificate of %s was not requested with a ServiceAccount token from %s", dpu.Name, saNamespace)
+		}
 		Expect(approvedCNs.Has("system:node:"+dpu.Name)).To(BeTrue(), "no approved kubelet CSR for %s", dpu.Name)
 
 		// The DPU cluster Node, its Lease and the labels Cluster Config applied.
@@ -740,13 +751,20 @@ func verifyMockDPUsProvisioned(ctx context.Context, env *mockDPUEnv, dpuType pro
 			Expect(s.Type).NotTo(Equal(corev1.SecretTypeBootstrapToken), "bootstrap token %s in the %s was not revoked", s.Name, name)
 		}
 	}
+	// ... and, for ServiceAccount token DPUs, the bootstrap ServiceAccounts with their tokens.
+	if wantIdentityMode == provisioningv1.IdentityModeServiceAccountToken {
+		serviceAccounts := &corev1.ServiceAccountList{}
+		Expect(env.client.List(ctx, serviceAccounts, client.InNamespace(saNamespace), client.MatchingLabels{cutil.LabelDPUNamespace: env.namespace})).To(Succeed())
+		Expect(serviceAccounts.Items).To(BeEmpty(), "bootstrap ServiceAccounts in %s were not revoked", saNamespace)
+	}
 }
 
-// approvedCSRCommonNames returns the subject common names of every approved and issued CSR.
-func approvedCSRCommonNames(ctx context.Context, cl client.Client) sets.Set[string] {
+// approvedCSRRequesters returns, by subject common name, the requesters of every approved and
+// issued CSR.
+func approvedCSRRequesters(ctx context.Context, cl client.Client) map[string]sets.Set[string] {
 	csrs := &certificatesv1.CertificateSigningRequestList{}
 	Expect(cl.List(ctx, csrs)).To(Succeed())
-	out := sets.New[string]()
+	out := map[string]sets.Set[string]{}
 	for _, csr := range csrs.Items {
 		approved := false
 		for _, cond := range csr.Status.Conditions {
@@ -759,7 +777,10 @@ func approvedCSRCommonNames(ctx context.Context, cl client.Client) sets.Set[stri
 		}
 		if block, _ := pem.Decode(csr.Spec.Request); block != nil {
 			if req, err := x509.ParseCertificateRequest(block.Bytes); err == nil {
-				out.Insert(req.Subject.CommonName)
+				if out[req.Subject.CommonName] == nil {
+					out[req.Subject.CommonName] = sets.New[string]()
+				}
+				out[req.Subject.CommonName].Insert(csr.Spec.Username)
 			}
 		}
 	}

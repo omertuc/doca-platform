@@ -677,6 +677,137 @@ var _ = Describe("Operator API Validation", func() {
 			})
 		})
 
+		Context("Validate DPU agent bootstrap configuration", func() {
+			DescribeTable("dpuAgentBootstrap",
+				func(dpuAgentBootstrap *operatorv1.DPUAgentBootstrapConfiguration, expectError bool, errorMessage string) {
+					config := getMinimalDPFOperatorConfig(testNs.Name)
+					config.Spec.Security = &operatorv1.SecurityConfiguration{DPUAgentBootstrap: dpuAgentBootstrap}
+					validateConfigCreation(config, expectError, errorMessage, &cleanupObjs)
+				},
+				Entry("valid - no dpuAgentBootstrap", nil, false, ""),
+				Entry("valid - BootstrapToken",
+					&operatorv1.DPUAgentBootstrapConfiguration{Method: operatorv1.DPUAgentBootstrapMethodBootstrapToken}, false, ""),
+				Entry("valid - ServiceAccountToken in the default namespace",
+					&operatorv1.DPUAgentBootstrapConfiguration{Method: operatorv1.DPUAgentBootstrapMethodServiceAccountToken}, false, ""),
+				Entry("valid - ServiceAccountToken in a namespace of its own",
+					&operatorv1.DPUAgentBootstrapConfiguration{
+						Method:                  operatorv1.DPUAgentBootstrapMethodServiceAccountToken,
+						ServiceAccountNamespace: "dpu-agent-bootstrap",
+					}, false, ""),
+				Entry("invalid - unknown method",
+					&operatorv1.DPUAgentBootstrapConfiguration{Method: "ClientCertificate"},
+					true, "spec.security.dpuAgentBootstrap.method"),
+				Entry("invalid - the default namespace",
+					&operatorv1.DPUAgentBootstrapConfiguration{ServiceAccountNamespace: "default"},
+					true, "must be a dedicated namespace"),
+				Entry("invalid - a kube- namespace",
+					&operatorv1.DPUAgentBootstrapConfiguration{ServiceAccountNamespace: "kube-system"},
+					true, "must be a dedicated namespace"),
+				Entry("invalid - an openshift- namespace",
+					&operatorv1.DPUAgentBootstrapConfiguration{ServiceAccountNamespace: "openshift-dpu-agents"},
+					true, "must be a dedicated namespace"),
+				Entry("invalid - not a DNS label",
+					&operatorv1.DPUAgentBootstrapConfiguration{ServiceAccountNamespace: "DPU_Agents"},
+					true, "spec.security.dpuAgentBootstrap.serviceAccountNamespace"),
+				Entry("invalid - longer than a namespace name may be",
+					&operatorv1.DPUAgentBootstrapConfiguration{ServiceAccountNamespace: strings.Repeat("a", 64)},
+					true, "spec.security.dpuAgentBootstrap.serviceAccountNamespace"),
+			)
+
+			// SPIFFE-mode DPU Agents never bootstrap with a token, so a config asking for both is
+			// rejected rather than resolved in favor of one of them.
+			DescribeTable("with spiffe",
+				func(method operatorv1.DPUAgentBootstrapMethod, expectError bool, errorMessage string) {
+					config := getZeroTrustDPFOperatorConfig(testNs.Name)
+					setSPIFFEConfig(config, getValidSPIFFEConfiguration())
+					config.Spec.Security.DPUAgentBootstrap = &operatorv1.DPUAgentBootstrapConfiguration{Method: method}
+					validateConfigCreation(config, expectError, errorMessage, &cleanupObjs)
+				},
+				Entry("valid - BootstrapToken", operatorv1.DPUAgentBootstrapMethodBootstrapToken, false, ""),
+				Entry("invalid - ServiceAccountToken", operatorv1.DPUAgentBootstrapMethodServiceAccountToken,
+					true, "spiffe and dpuAgentBootstrap.method ServiceAccountToken are mutually exclusive"),
+			)
+
+			It("rejects ServiceAccountToken on a config that has spiffe", func() {
+				config := getZeroTrustDPFOperatorConfig(testNs.Name)
+				setSPIFFEConfig(config, getValidSPIFFEConfiguration())
+				Expect(testClient.Create(ctx, config)).To(Succeed())
+				cleanupObjs = append(cleanupObjs, config)
+
+				patch := client.MergeFrom(config.DeepCopy())
+				config.Spec.Security.DPUAgentBootstrap = &operatorv1.DPUAgentBootstrapConfiguration{
+					Method: operatorv1.DPUAgentBootstrapMethodServiceAccountToken,
+				}
+				Expect(testClient.Patch(ctx, config, patch)).To(MatchError(ContainSubstring("mutually exclusive")))
+			})
+
+			It("defaults the method and the namespace", func() {
+				config := getMinimalDPFOperatorConfig(testNs.Name)
+				config.Spec.Security = &operatorv1.SecurityConfiguration{
+					DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{},
+				}
+				Expect(testClient.Create(ctx, config)).To(Succeed())
+				cleanupObjs = append(cleanupObjs, config)
+
+				Expect(config.Spec.Security.DPUAgentBootstrap.Method).To(Equal(operatorv1.DPUAgentBootstrapMethodBootstrapToken))
+				Expect(config.Spec.Security.DPUAgentBootstrap.ServiceAccountNamespace).
+					To(Equal(operatorv1.DefaultDPUAgentBootstrapServiceAccountNamespace))
+			})
+
+			// DPUs initialized with the ServiceAccountToken method mint their tokens from this
+			// configuration whenever they are provisioned again, and the CSR approver only trusts
+			// the configured namespace, so neither may change once the method is selected.
+			DescribeTable("transitions",
+				func(before, after *operatorv1.SecurityConfiguration, expectError bool, errorMessage string) {
+					config := getMinimalDPFOperatorConfig(testNs.Name)
+					config.Spec.Security = before
+					Expect(testClient.Create(ctx, config)).To(Succeed())
+					cleanupObjs = append(cleanupObjs, config)
+
+					patch := client.MergeFrom(config.DeepCopy())
+					config.Spec.Security = after
+					err := testClient.Patch(ctx, config, patch)
+					if expectError {
+						Expect(err).To(MatchError(ContainSubstring(errorMessage)))
+					} else {
+						Expect(err).NotTo(HaveOccurred())
+					}
+				},
+				Entry("ok - from unset to ServiceAccountToken",
+					nil, dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, ""), false, ""),
+				Entry("ok - from BootstrapToken to ServiceAccountToken in another namespace",
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodBootstrapToken, ""),
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, "dpu-agent-bootstrap"), false, ""),
+				Entry("ok - other security settings change along with ServiceAccountToken",
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, "dpu-agent-bootstrap"),
+					func() *operatorv1.SecurityConfiguration {
+						security := dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, "dpu-agent-bootstrap")
+						security.PrivilegedPodEnforcement = ptr.To(false)
+						return security
+					}(), false, ""),
+				Entry("reject - from ServiceAccountToken to BootstrapToken",
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, ""),
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodBootstrapToken, ""),
+					true, "cannot be changed from ServiceAccountToken once set"),
+				Entry("reject - removing dpuAgentBootstrap with ServiceAccountToken",
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, ""),
+					&operatorv1.SecurityConfiguration{},
+					true, "cannot be changed from ServiceAccountToken once set"),
+				Entry("reject - removing security with ServiceAccountToken",
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, ""),
+					nil,
+					true, "cannot be changed from ServiceAccountToken once set"),
+				Entry("reject - moving the ServiceAccountToken namespace",
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, "dpu-agent-bootstrap"),
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodServiceAccountToken, "other-dpu-agent-bootstrap"),
+					true, "serviceAccountNamespace is immutable while method is ServiceAccountToken"),
+				Entry("ok - moving the namespace while BootstrapToken is selected",
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodBootstrapToken, "dpu-agent-bootstrap"),
+					dpuAgentBootstrapSecurity(operatorv1.DPUAgentBootstrapMethodBootstrapToken, "other-dpu-agent-bootstrap"),
+					false, ""),
+			)
+		})
+
 		Context("Validate etcd encryption at rest", func() {
 			It("accepts provider staticKey with a staticKey ref", func() {
 				config := getMinimalDPFOperatorConfig(testNs.Name)
@@ -1186,6 +1317,15 @@ func enabledVaultKMS() *operatorv1.VaultKMSConfiguration {
 		Auth: operatorv1.VaultKMSAuth{
 			Method: operatorv1.VaultKMSAuthMethodToken,
 			Token:  &operatorv1.VaultKMSTokenAuth{TokenSecretRef: operatorv1.SecretKeyRef{Name: "vault-token", Key: "token"}},
+		},
+	}
+}
+
+func dpuAgentBootstrapSecurity(method operatorv1.DPUAgentBootstrapMethod, namespace string) *operatorv1.SecurityConfiguration {
+	return &operatorv1.SecurityConfiguration{
+		DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{
+			Method:                  method,
+			ServiceAccountNamespace: namespace,
 		},
 	}
 }

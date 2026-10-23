@@ -18,6 +18,7 @@ package state
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	operatorv1 "github.com/nvidia/doca-platform/api/operator/v1alpha1"
@@ -176,5 +177,98 @@ func TestEnsureRBACSkipsBootstrapTokenForSPIFFEDPU(t *testing.T) {
 	}
 	if len(secrets.Items) != 0 {
 		t.Fatalf("bootstrap secrets = %#v, want none", secrets.Items)
+	}
+}
+
+// TestEnsureRBACMintsServiceAccountTokenForServiceAccountTokenDPU covers the
+// service-account-token DPU: it gets a token of its bootstrap ServiceAccount in the configured
+// namespace in place of a bootstrap token, and binds the certificate username like a
+// bootstrap-token DPU.
+func TestEnsureRBACMintsServiceAccountTokenForServiceAccountTokenDPU(t *testing.T) {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(operatorv1.AddToScheme(scheme))
+	utilruntime.Must(provisioningv1.AddToScheme(scheme))
+
+	dpu := &provisioningv1.DPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "dpu-01", Namespace: "dpf-operator-system", UID: "dpu-uid-01"},
+		Status:     provisioningv1.DPUStatus{IdentityMode: ptr.To(provisioningv1.IdentityModeServiceAccountToken)},
+	}
+	device := &provisioningv1.DPUDevice{
+		ObjectMeta: metav1.ObjectMeta{Name: "device-01", Namespace: dpu.Namespace},
+		Spec:       provisioningv1.DPUDeviceSpec{SerialNumber: "SN123"},
+	}
+	config := &operatorv1.DPFOperatorConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: dpu.Namespace},
+		Spec: operatorv1.DPFOperatorConfigSpec{
+			Security: &operatorv1.SecurityConfiguration{
+				DPUAgentBootstrap: &operatorv1.DPUAgentBootstrapConfiguration{
+					Method:                  operatorv1.DPUAgentBootstrapMethodServiceAccountToken,
+					ServiceAccountNamespace: "dpu-bootstrap",
+				},
+			},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config).Build()
+	ctrlCtx := &dutil.ControllerContext{Client: fakeClient, Scheme: scheme}
+
+	token, err := ensureRBAC(context.Background(), ctrlCtx, dpu, device)
+	if err != nil {
+		t.Fatalf("ensureRBAC() error = %v", err)
+	}
+	// The fake client answers every TokenRequest with this token.
+	if token != "fake-token" {
+		t.Fatalf("ensureRBAC() token = %q, want the ServiceAccount token", token)
+	}
+
+	sa := &corev1.ServiceAccount{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKey{Name: "dpu-agent-dpu-uid-01", Namespace: "dpu-bootstrap"}, sa); err != nil {
+		t.Fatalf("get bootstrap ServiceAccount: %v", err)
+	}
+	if sa.Labels[cutil.LabelDPUName] != dpu.Name || sa.Labels[cutil.LabelDPUNamespace] != dpu.Namespace || sa.Labels[cutil.LabelDPUUID] != string(dpu.UID) {
+		t.Fatalf("bootstrap ServiceAccount labels = %v", sa.Labels)
+	}
+
+	roleBinding := &rbacv1.RoleBinding{}
+	if err := fakeClient.Get(context.Background(), client.ObjectKey{Name: "da-dpu-01", Namespace: dpu.Namespace}, roleBinding); err != nil {
+		t.Fatalf("get RoleBinding: %v", err)
+	}
+	if len(roleBinding.Subjects) != 1 || roleBinding.Subjects[0].Name != "da-dpu-01" {
+		t.Fatalf("RoleBinding subjects = %#v", roleBinding.Subjects)
+	}
+
+	secrets := &corev1.SecretList{}
+	if err := fakeClient.List(context.Background(), secrets, client.InNamespace("kube-system")); err != nil {
+		t.Fatalf("list bootstrap secrets: %v", err)
+	}
+	if len(secrets.Items) != 0 {
+		t.Fatalf("bootstrap token secrets = %d, want 0", len(secrets.Items))
+	}
+}
+
+// TestEnsureRBACRefusesServiceAccountTokenDPUWithoutTheMethod covers a service-account-token DPU
+// provisioned again after the DPFOperatorConfig was recreated without the ServiceAccountToken
+// method: the namespace and the binding its token relies on are gone, so it must fail clearly.
+func TestEnsureRBACRefusesServiceAccountTokenDPUWithoutTheMethod(t *testing.T) {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(operatorv1.AddToScheme(scheme))
+	utilruntime.Must(provisioningv1.AddToScheme(scheme))
+
+	dpu := &provisioningv1.DPU{
+		ObjectMeta: metav1.ObjectMeta{Name: "dpu-01", Namespace: "dpf-operator-system", UID: "dpu-uid-01"},
+		Status:     provisioningv1.DPUStatus{IdentityMode: ptr.To(provisioningv1.IdentityModeServiceAccountToken)},
+	}
+	device := &provisioningv1.DPUDevice{
+		ObjectMeta: metav1.ObjectMeta{Name: "device-01", Namespace: dpu.Namespace},
+		Spec:       provisioningv1.DPUDeviceSpec{SerialNumber: "SN123"},
+	}
+	config := &operatorv1.DPFOperatorConfig{ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: dpu.Namespace}}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config).Build()
+	ctrlCtx := &dutil.ControllerContext{Client: fakeClient, Scheme: scheme}
+
+	_, err := ensureRBAC(context.Background(), ctrlCtx, dpu, device)
+	if err == nil || !strings.Contains(err.Error(), "spec.security.dpuAgentBootstrap.method is not ServiceAccountToken") {
+		t.Fatalf("ensureRBAC() error = %v, want the method mismatch", err)
 	}
 }

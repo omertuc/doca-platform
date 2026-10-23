@@ -31,6 +31,15 @@ ADD_CONTROL_PLANE_TAINTS="${ADD_CONTROL_PLANE_TAINTS:-"false"}"
 # See https://github.com/kubernetes/enhancements/tree/master/keps/sig-network/3668-reserved-service-nodeport-range
 DPUCLUSTER_NODE_PORT="30043"
 KIND_CONFIG_FILE="/tmp/kind-config-${CLUSTER_NAME}.yaml"
+# Run kube-apiserver without bootstrap token authentication, like distributions that do not support
+# it, to show that DPF does not need it (see the test-e2e-mock-dpuagent-sa-token make target).
+DISABLE_BOOTSTRAP_TOKEN_AUTH="${DISABLE_BOOTSTRAP_TOKEN_AUTH:-"false"}"
+API_SERVER_CONFIG=""
+if [[ "$DISABLE_BOOTSTRAP_TOKEN_AUTH" == "true" ]]; then
+	API_SERVER_CONFIG='    apiServer:
+      extraArgs:
+        enable-bootstrap-token-auth: "false"'
+fi
 # Registry mirror configuration (comma-separated list of host:target-endpoint)
 # Example: "docker.io:https://registry-1.docker.io,gcr.io:https://mirror.gcr.io"
 REGISTRY_MIRRORS="${REGISTRY_MIRRORS:-""}"
@@ -75,6 +84,7 @@ nodes:
       local:
         extraArgs:
           listen-metrics-urls: "http://0.0.0.0:2381"
+${API_SERVER_CONFIG}
   extraPortMappings:
   - containerPort: ${DPUCLUSTER_NODE_PORT}
     hostPort: ${DPUCLUSTER_NODE_PORT}
