@@ -153,6 +153,8 @@ type DPFOperatorConfigReconcilerSettings struct {
 
 // Kubernetes Objects
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=create
+// The namespace of the DPU Agent bootstrap ServiceAccounts is part of the provisioning controller ApplySet.
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes;pods;pods/exec;jobs;serviceaccounts;serviceaccounts/token;persistentvolumeclaims;events,verbs=get;list;watch;create;patch;update;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps;secrets,verbs=get;list;create;patch;update;delete
 // +kubebuilder:rbac:groups="",resources=configmaps/finalizers,verbs=update

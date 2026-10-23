@@ -332,6 +332,8 @@ const (
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.security) || !has(oldSelf.security.spiffe) || (has(self.security) && has(self.security.spiffe))",message="spec.security.spiffe cannot be removed once set; SPIFFE-mode DPUs depend on this configuration. Disable SPIFFE for the cluster by deleting and recreating DPFOperatorConfig (DR escape hatch); existing SPIFFE-mode DPUs require re-provisioning."
 // +kubebuilder:validation:XValidation:rule="!has(self.kamajiClusterManager) || !has(self.kamajiClusterManager.etcdEncryptionAtRest) || self.kamajiClusterManager.etcdEncryptionAtRest.provider != 'vaultKMS' || (has(self.security) && has(self.security.vaultKMS) && (!has(self.security.vaultKMS.disable) || self.security.vaultKMS.disable == false))",message="kamajiClusterManager.etcdEncryptionAtRest.provider vaultKMS requires spec.security.vaultKMS to be enabled"
 // +kubebuilder:validation:XValidation:rule="(has(self.security) && has(self.security.certManagement) && has(self.security.certManagement.trustBundleConfigMapName) ? self.security.certManagement.trustBundleConfigMapName : 'dpf-ca-trust-bundle') == (has(oldSelf.security) && has(oldSelf.security.certManagement) && has(oldSelf.security.certManagement.trustBundleConfigMapName) ? oldSelf.security.certManagement.trustBundleConfigMapName : 'dpf-ca-trust-bundle')",message="spec.security.certManagement.trustBundleConfigMapName is immutable, including the default it falls back to when the certManagement block is absent: the name reaches each DPU in the provisioning configuration it is installed with, so changing it leaves the DPUs already provisioned reading a ConfigMap DPF no longer maintains"
+// +kubebuilder:validation:XValidation:rule="!(has(oldSelf.security) && has(oldSelf.security.dpuAgentBootstrap) && oldSelf.security.dpuAgentBootstrap.method == 'ServiceAccountToken') || (has(self.security) && has(self.security.dpuAgentBootstrap) && self.security.dpuAgentBootstrap.method == 'ServiceAccountToken')",message="spec.security.dpuAgentBootstrap.method cannot be changed from ServiceAccountToken once set; DPUs initialized with it mint their bootstrap tokens from this configuration whenever they are provisioned again. Change it by deleting and recreating DPFOperatorConfig (DR escape hatch); existing DPUs require re-provisioning."
+// +kubebuilder:validation:XValidation:rule="!(has(oldSelf.security) && has(oldSelf.security.dpuAgentBootstrap) && oldSelf.security.dpuAgentBootstrap.method == 'ServiceAccountToken') || (has(self.security) && has(self.security.dpuAgentBootstrap) && has(self.security.dpuAgentBootstrap.serviceAccountNamespace) ? self.security.dpuAgentBootstrap.serviceAccountNamespace : 'dpf-dpu-agent-bootstrap') == (has(oldSelf.security.dpuAgentBootstrap.serviceAccountNamespace) ? oldSelf.security.dpuAgentBootstrap.serviceAccountNamespace : 'dpf-dpu-agent-bootstrap')",message="spec.security.dpuAgentBootstrap.serviceAccountNamespace is immutable while method is ServiceAccountToken: the ServiceAccounts of DPUs that have not bootstrapped yet live there, and the CSR approver only trusts the configured namespace"
 type DPFOperatorConfigSpec struct {
 	// +optional
 	Overrides *Overrides `json:"overrides,omitempty"`
@@ -434,6 +436,7 @@ type MonitoringConfiguration struct {
 
 // SecurityConfiguration groups configuration for security-related configurations
 // managed by the DPF Operator.
+// +kubebuilder:validation:XValidation:rule="!has(self.spiffe) || !has(self.dpuAgentBootstrap) || self.dpuAgentBootstrap.method != 'ServiceAccountToken'",message="spiffe and dpuAgentBootstrap.method ServiceAccountToken are mutually exclusive: SPIFFE-mode DPU Agents authenticate with a JWT-SVID and do not bootstrap with a token"
 type SecurityConfiguration struct {
 	// PrivilegedPodEnforcement controls whether privileged pods are rejected
 	// unless explicitly allowed by the workload API. The DPUService controller
@@ -464,6 +467,13 @@ type SecurityConfiguration struct {
 	// but do NOT retro-apply to already-provisioned DPUs.
 	// +optional
 	SPIFFE *SPIFFEConfiguration `json:"spiffe,omitempty"`
+
+	// dpuAgentBootstrap selects how the DPU Agent authenticates to the kube-apiserver to request
+	// its first client certificate. The ServiceAccountToken method cannot be combined with spiffe,
+	// whose DPU Agents do not request one. Like spiffe, edits apply to DPUs initialized afterwards,
+	// never to DPUs that already have an identity mode.
+	// +optional
+	DPUAgentBootstrap *DPUAgentBootstrapConfiguration `json:"dpuAgentBootstrap,omitempty"`
 
 	// VaultKMS is the configuration for the standalone Vault/OpenBao KMS plugin component.
 	// It is deployed as a DaemonSet on control-plane nodes and is disabled by default.
@@ -513,6 +523,24 @@ type CertManagementConfiguration struct {
 // Returns true when Security is nil, PrivilegedPodEnforcement is nil, or it is true.
 func (s *SecurityConfiguration) PrivilegedPodEnforcementEnabled() bool {
 	return s == nil || ptr.Deref(s.PrivilegedPodEnforcement, true)
+}
+
+// DPUAgentBootstrapMethod returns the configured DPU Agent bootstrap method, BootstrapToken when
+// unset.
+func (s *SecurityConfiguration) DPUAgentBootstrapMethod() DPUAgentBootstrapMethod {
+	if s == nil || s.DPUAgentBootstrap == nil || s.DPUAgentBootstrap.Method == "" {
+		return DPUAgentBootstrapMethodBootstrapToken
+	}
+	return s.DPUAgentBootstrap.Method
+}
+
+// DPUAgentBootstrapServiceAccountNamespace returns the namespace of the per-DPU ServiceAccounts of
+// the ServiceAccountToken bootstrap method, the default when unset.
+func (s *SecurityConfiguration) DPUAgentBootstrapServiceAccountNamespace() string {
+	if s == nil || s.DPUAgentBootstrap == nil || s.DPUAgentBootstrap.ServiceAccountNamespace == "" {
+		return DefaultDPUAgentBootstrapServiceAccountNamespace
+	}
+	return s.DPUAgentBootstrap.ServiceAccountNamespace
 }
 
 // DPFOperatorConfigStatus defines the observed state of DPFOperatorConfig

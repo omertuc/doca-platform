@@ -507,7 +507,7 @@ type DPUStatus struct {
 	// management-cluster kube-apiserver. Stamped exactly once by the DPU controller during phase
 	// Initializing (nil guard); immutable thereafter. Pre-SPIFFE legacy DPUs have IdentityMode
 	// unset (nil) which consumers MUST treat semantically as bootstrap-token.
-	// +kubebuilder:validation:Enum=spiffe;bootstrap-token
+	// +kubebuilder:validation:Enum=spiffe;bootstrap-token;service-account-token
 	// +optional
 	IdentityMode *IdentityMode `json:"identityMode,omitempty"`
 
@@ -719,6 +719,10 @@ const (
 	// An unset (nil) IdentityMode is treated semantically as bootstrap-token; no sentinel is declared
 	// for the unset case deliberately, to force explicit handling by consumers.
 	IdentityModeBootstrapToken IdentityMode = "bootstrap-token"
+	// IdentityModeServiceAccountToken indicates the DPU Agent bootstraps its client certificate with a
+	// short-lived token of a per-DPU ServiceAccount, for kube-apiservers without bootstrap token
+	// authentication. After the bootstrap it authenticates exactly as a bootstrap-token DPU does.
+	IdentityModeServiceAccountToken IdentityMode = "service-account-token"
 )
 
 // SpiffeStatus is the DPU Agent's SPIFFE heartbeat sub-status.

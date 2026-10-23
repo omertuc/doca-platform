@@ -455,6 +455,51 @@ type SPIFFEConfiguration struct {
 	CSIDriver *SPIFFECSIDriverConfiguration `json:"csiDriver,omitempty"`
 }
 
+// DPUAgentBootstrapMethod is how the DPU Agent authenticates the request for its first client
+// certificate.
+// +kubebuilder:validation:Enum=BootstrapToken;ServiceAccountToken
+type DPUAgentBootstrapMethod string
+
+const (
+	// DPUAgentBootstrapMethodBootstrapToken uses a per-DPU bootstrap token. It requires the
+	// kube-apiserver to run with --enable-bootstrap-token-auth.
+	DPUAgentBootstrapMethodBootstrapToken DPUAgentBootstrapMethod = "BootstrapToken"
+	// DPUAgentBootstrapMethodServiceAccountToken uses a short-lived token of a per-DPU ServiceAccount
+	// instead of a bootstrap token, which does not depend on --enable-bootstrap-token-auth.
+	DPUAgentBootstrapMethodServiceAccountToken DPUAgentBootstrapMethod = "ServiceAccountToken"
+)
+
+// DefaultDPUAgentBootstrapServiceAccountNamespace is the default namespace of the per-DPU
+// ServiceAccounts of the ServiceAccountToken bootstrap method.
+const DefaultDPUAgentBootstrapServiceAccountNamespace = "dpf-dpu-agent-bootstrap"
+
+// DPUAgentBootstrapConfiguration configures how the DPU Agent authenticates to the kube-apiserver
+// to request its first client certificate. After that, it authenticates with that certificate
+// whichever method issued it.
+type DPUAgentBootstrapConfiguration struct {
+	// method is BootstrapToken (the default) or ServiceAccountToken. Use ServiceAccountToken when
+	// the kube-apiserver does not accept bootstrap tokens (no --enable-bootstrap-token-auth). The
+	// DPU controller then creates a ServiceAccount per DPU in serviceAccountNamespace and puts a
+	// short-lived token of it into the DPU's bootstrap kubeconfig.
+	// ServiceAccountToken cannot be combined with spec.security.spiffe, and once set, it cannot be
+	// changed back.
+	// +kubebuilder:default=BootstrapToken
+	// +optional
+	Method DPUAgentBootstrapMethod `json:"method,omitempty"`
+
+	// serviceAccountNamespace is the namespace of the per-DPU ServiceAccounts. The DPF Operator
+	// creates it and grants every ServiceAccount in it the right to request DPU Agent client
+	// certificates, so it must be dedicated to them: nothing else may run or create ServiceAccounts
+	// there. Only used by the ServiceAccountToken method, and immutable while it is selected.
+	// +kubebuilder:default=dpf-dpu-agent-bootstrap
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self != 'default' && !self.startsWith('kube-') && !self.startsWith('openshift-')",message="serviceAccountNamespace must be a dedicated namespace: default and the kube- and openshift- prefixes are reserved"
+	// +optional
+	ServiceAccountNamespace string `json:"serviceAccountNamespace,omitempty"`
+}
+
 // SPIFFECSIDriverConfiguration is the configuration for the SPIFFE CSI driver.
 // It is deployed whenever SPIFFE is configured, so it cannot be disabled on its own.
 type SPIFFECSIDriverConfiguration struct {
